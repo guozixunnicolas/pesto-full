@@ -42,7 +42,12 @@ class ShiftCrossEntropy(nn.Module):
         x2 = F.pad(x2, (2*self.pad_length, 2*self.pad_length))
 
         # shift x2
-        idx = target.unsqueeze(1) + torch.arange(x1.size(-1), device=target.device) + self.pad_length
+        idx = target.unsqueeze(1) + torch.arange(x1.size(-1), device=target.device) + self.pad_length #offset by pad length since x2 is padded twice
+
+        """
+        target.unsqueeze(1) --> batch, 1
+        torch.arange(x1.size(-1), device=target.device) --> 1, num_bins ==> for each tensor in batch, add target offset to bins #offset by pad length since x2 is padded twice
+        """
         shift_x2 = torch.gather(x2, dim=1, index=idx)
 
         # compute loss
