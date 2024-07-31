@@ -252,7 +252,7 @@ class AudioDataModule(LightningDataModule):
 
             cqt_list.append(out.cpu().numpy())
 
-        return np.concatenate(cqt_list), np.concatenate(annot_list) if annot_list is not None else None
+        return np.concatenate(cqt_list), np.concatenate(annot_list) if annot_list is not None else None #(concated_time (batch_dimension), harmonics, freq_bins, 2)
 
     def hcqt(self, audio: torch.Tensor, sr: int):
         # compute CQT kernels if it does not exist yet
