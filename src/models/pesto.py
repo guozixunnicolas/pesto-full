@@ -32,9 +32,9 @@ class PESTO(LightningModule):
         self.scheduler_cls = scheduler
 
         # loss definitions
-        self.equiv_loss_fn = equiv_loss_fn or NullLoss()
-        self.sce_loss_fn = sce_loss_fn or NullLoss()
-        self.inv_loss_fn = inv_loss_fn or NullLoss()
+        self.equiv_loss_fn = equiv_loss_fn or NullLoss() #src.losses.equivariance.PowerSeries
+        self.sce_loss_fn = sce_loss_fn or NullLoss() # src.losses.entropy.ShiftCrossEntropy 
+        self.inv_loss_fn = inv_loss_fn or NullLoss() # src.losses.entropy.CrossEntropyLoss 
 
         # pitch-shift CQT
         if pitch_shift_kwargs is None:
@@ -62,11 +62,16 @@ class PESTO(LightningModule):
                 x: torch.Tensor,
                 shift: bool = True,
                 return_activations: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        x, *_ = self.pitch_shift(x)  # the CQT has to be cropped beforehand
+        """
+        check input shape torch.Size([12, 1, 296]) #batch, num_harmonics, num_bins 
+        check x after pitch shift torch.Size([12, 1, 264])
+        check x after activation torch.Size([12, 384])
+        check activation after reduction torch.Size([12]) alwa
+        """
 
+        x, *_ = self.pitch_shift(x)  # batch, num_harmincs, bins_shifted, the CQT has to be cropped beforehand
         activations = self.encoder(x)
-        preds = reduce_activations(activations, reduction=self.reduction)
-
+        preds = reduce_activations(activations, reduction=self.reduction) # "pool" along the bin dimension
         if shift:
             preds.sub_(self.shift)
 
@@ -109,16 +114,15 @@ class PESTO(LightningModule):
         x, xt, n_steps = self.pitch_shift(x)
         xa = x.clone()
 
-        xa = self.transforms(xa)
+        xa = self.transforms(xa) #TODO: for speech, this has to be changed to other types of augmentations
         xt = self.transforms(xt)
 
         # pass through network
         y = self.encoder(x)
         ya = self.encoder(xa)
-        yt = self.encoder(xt)
-
+        yt = self.encoder(xt) #xa and xt not the same thing? 
         # invariance
-        inv_loss = self.inv_loss_fn(y, ya)
+        inv_loss = self.inv_loss_fn(y, ya) #force the network to be invariant to transforms
 
         # shift-entropy
         shift_entropy_loss = self.sce_loss_fn(ya, yt, n_steps)
