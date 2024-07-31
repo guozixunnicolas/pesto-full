@@ -4,7 +4,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Sequence, Tuple, Any
-
+import os
 import numpy as np
 from tqdm import tqdm
 
@@ -224,8 +224,8 @@ class AudioDataModule(LightningDataModule):
         for fname, annot in pbar:
             fname = fname.strip()
             pbar.set_description(fname)
-            x, sr = torchaudio.load(data_dir / fname)
-            out = self.hcqt(x.mean(dim=0), sr)  # convert to mono and compute HCQT
+            x, sr = torchaudio.load(os.path.join(data_dir, fname))
+            out = self.hcqt(x.mean(dim=0), sr)  # convert to mono and compute HCQT  -->  # (time, harmonics, freq_bins, 2)
 
             if annot is not None:
                 annot = annot.strip()
