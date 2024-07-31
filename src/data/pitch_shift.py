@@ -33,7 +33,7 @@ class PitchShiftCQT(nn.Module):
         self.lower_bin = self.max_steps
 
     def forward(self, spectrograms: torch.Tensor):
-        batch_size, _, input_height = spectrograms.size()
+        batch_size, _, input_height = spectrograms.size() #batch, num_harmonics, num_bins 
         output_height = input_height - self.max_steps + self.min_steps
         assert output_height > 0, \
             f"With input height {input_height:d} and output height {output_height:d}, impossible " \
@@ -57,7 +57,7 @@ class PitchShiftCQT(nn.Module):
         Returns:
             segments of CQTs, shape (batch_size, num_channels, output_height)
         """
-        indices = first_bin.unsqueeze(-1) + torch.arange(output_height, device=inputs.device)
+        indices = first_bin.unsqueeze(-1) + torch.arange(output_height, device=inputs.device) # (batch, 1) + (output_height)
         dims = inputs.size(0), 1, output_height
 
         output_size = list(inputs.size())[:-1] + [output_height]
