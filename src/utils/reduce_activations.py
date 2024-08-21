@@ -1,7 +1,7 @@
 import torch
 
 
-def reduce_activations(activations: torch.Tensor, reduction: str = "alwa") -> torch.Tensor:
+def reduce_activations_music(activations: torch.Tensor, reduction: str = "alwa") -> torch.Tensor:
     r"""
 
     Args:
@@ -28,6 +28,41 @@ def reduce_activations(activations: torch.Tensor, reduction: str = "alwa") -> to
     if reduction == "alwa":  # argmax-local weighted averaging, see https://github.com/marl/crepe
         center_bin = activations.argmax(dim=1, keepdim=True)
         window = torch.arange(1, 2 * bps, device=device) - bps
+        indices = (window + center_bin).clip_(min=0, max=num_bins - 1)
+        cropped_activations = activations.gather(1, indices)
+        cropped_pitches = all_pitches.unsqueeze(0).expand_as(activations).gather(1, indices)
+        return (cropped_activations * cropped_pitches).sum(dim=1) / cropped_activations.sum(dim=1)
+
+    raise ValueError
+
+
+def reduce_activations(activations: torch.Tensor, reduction: str = "alwa", max_F0 = 512) -> torch.Tensor:
+    r"""
+
+    Args:
+        activations: tensor of probability activations, shape (batch_size, num_bins)
+        reduction (str): reduction method to compute pitch out of activations,
+            choose between "argmax", "mean", "alwa".
+
+    Returns:
+        torch.Tensor: pitches as fractions of MIDI semitones, shape (batch_size)
+    """
+    device = activations.device
+    num_bins = activations.size(1)
+    bphz, r = divmod(num_bins, max_F0) #bins per Hz
+    assert r == 0, "Activations' size should be multiples of max_frequency"
+
+    if reduction == "argmax":
+        pred = activations.argmax(dim=1)
+        return pred.float() / bphz
+
+    all_pitches = torch.arange(num_bins, dtype=torch.float, device=device).div_(bphz)
+    if reduction == "mean":
+        return torch.mm(activations, all_pitches)
+
+    if reduction == "alwa":  # argmax-local weighted averaging, see https://github.com/marl/crepe #TODO: see how to change!
+        center_bin = activations.argmax(dim=1, keepdim=True)
+        window = torch.arange(1, 2 * bphz, device=device) - bphz
         indices = (window + center_bin).clip_(min=0, max=num_bins - 1)
         cropped_activations = activations.gather(1, indices)
         cropped_pitches = all_pitches.unsqueeze(0).expand_as(activations).gather(1, indices)
