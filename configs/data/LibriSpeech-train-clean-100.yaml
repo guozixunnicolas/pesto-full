@@ -1,0 +1,5 @@
+defaults:
+  - default
+
+audio_files: LibriSpeech_train-clean-100.csv
+hop_duration: 20.
