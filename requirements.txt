@@ -1,12 +1,12 @@
 # pytorch
-torch>=2.1.2
-torchaudio>=2.1.2
+torch
+torchaudio
 
 # lightning
-lightning>=2.1.3
+lightning
 
 # hydra
-hydra-core>=1.3.2
+hydra-core
 hydra-colorlog
 
 # nnAudio
