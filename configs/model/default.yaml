@@ -12,8 +12,11 @@ encoder:
   n_prefilt_layers: 2
   prefilt_kernel_size: 15
   residual: true
-  n_bins_in: ${eval:88 * ${data.bins_per_semitone}}
-  output_dim: ${eval:128 * ${data.bins_per_semitone}}
+  # n_bins_in: ${eval:88 * ${data.bins_per_semitone}}
+  # output_dim: ${eval:128 * ${data.bins_per_semitone}}
+
+  n_bins_in: 4065 # #ugly fix! change this to --> FFT_size/2 - shift  513 - 16*2 = 481   #${eval:${data.stft_fft_size}//2 + 1} #${eval:88 * ${data.bins_per_semitone}} #TODO: what should be the dimension for n_bin_in? n_fft I think
+  output_dim: ${model.max_F0} #bins per hz = 1
 
 equiv_loss_fn:
   _target_: src.losses.equivariance.PowerSeries
@@ -35,7 +38,7 @@ sce_loss_fn:
 optimizer:
   _target_: torch.optim.Adam
   _partial_: true
-  lr: 1e-4
+  lr: 5e-5 #if still cannot converge then change this to smaller value 5e-5? 
   weight_decay: 0
 
 scheduler:
@@ -56,3 +59,5 @@ transforms:
     min_gain: 0.5
     max_gain: 1.5
     p: 0.7
+  
+max_F0: 512
