@@ -25,7 +25,8 @@ class PESTO(LightningModule):
                  inv_loss_fn: nn.Module | None = None,
                  pitch_shift_kwargs: Mapping[str, Any] | None = None,
                  transforms: Sequence[nn.Module] | None = None,
-                 reduction: str = "alwa"):
+                 reduction: str = "alwa",
+                 max_F0: int = 512):
         super(PESTO, self).__init__()
         self.encoder = encoder
         self.optimizer_cls = optimizer
@@ -58,6 +59,8 @@ class PESTO(LightningModule):
         # save hparams
         self.hyperparams = dict(encoder=encoder.hparams, pitch_shift=pitch_shift_kwargs)
 
+        self.max_F0 = max_F0
+
     def forward(self,
                 x: torch.Tensor,
                 shift: bool = True,
@@ -68,10 +71,9 @@ class PESTO(LightningModule):
         check x after activation torch.Size([12, 384])
         check activation after reduction torch.Size([12]) alwa
         """
-
         x, *_ = self.pitch_shift(x)  # batch, num_harmincs, bins_shifted, the CQT has to be cropped beforehand
         activations = self.encoder(x)
-        preds = reduce_activations(activations, reduction=self.reduction) # "pool" along the bin dimension
+        preds = reduce_activations(activations, reduction=self.reduction, max_F0 = self.max_F0) # "pool" along the bin dimension
         if shift:
             preds.sub_(self.shift)
 
@@ -155,6 +157,9 @@ class PESTO(LightningModule):
         """
         checkpoint["hparams"] = remove_omegaconf_dependencies(self.hyperparams)
         checkpoint['hcqt_params'] = remove_omegaconf_dependencies(self.trainer.datamodule.hcqt_kwargs)
+        checkpoint['stft_params'] = remove_omegaconf_dependencies(self.trainer.datamodule.stft_kwargs)
+        checkpoint['preprocessing_method'] = remove_omegaconf_dependencies(self.trainer.datamodule.preprocessing_method)
+        checkpoint['max_F0'] = remove_omegaconf_dependencies(self.max_F0)
 
     def configure_optimizers(self) -> Mapping[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.
@@ -175,16 +180,21 @@ class PESTO(LightningModule):
     def estimate_shift(self) -> None:
         r"""Estimate the shift to predict absolute pitches from relative activations"""
         # 0. Define labels
-        labels = torch.arange(60, 72)
-
+        labels = torch.arange(1, 30)
+        labels_frequencies = 440.0 * 2 ** ((labels - 69) / 12)
         # 1. Generate synthetic audio and convert it to HCQT
         sr = 16000
         dm = self.trainer.datamodule
         batch = []
         for p in labels:
             audio = generate_synth_data(p, sr=sr)
-            hcqt = dm.hcqt(audio, sr)
-            batch.append(hcqt[0])
+            """TODO: add switch between stft and hcqt"""
+            # hcqt = dm.hcqt(audio, sr)
+            # batch.append(hcqt[0])
+
+            stft = dm.stft(audio, sr)
+            # print(f"stft norm AAA: {stft.shape}")
+            batch.append(stft[0]) #pitch is the same across all timesteps so only choose time[0]
 
         # 2. Stack batch and apply final transforms
         x = torch.stack(batch, dim=0).to(self.device)
@@ -194,7 +204,7 @@ class PESTO(LightningModule):
         preds = self.forward(x, shift=False)
 
         # 4. Compute the difference between the predictions and the expected values
-        diff = preds - labels.to(self.device)
+        diff = preds - labels_frequencies.to(self.device)
 
         # 5. Define the shift as the median distance and check that the std is low-enough
         shift, std = diff.median(), diff.std()
