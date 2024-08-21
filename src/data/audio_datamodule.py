@@ -16,6 +16,7 @@ import torchaudio
 from lightning import LightningDataModule
 
 from src.data.hcqt import HarmonicCQT
+from nnAudio.features import STFT
 
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,10 @@ class AudioDataModule(LightningDataModule):
                  hop_duration: float = 10.,
                  fmin: float = 27.5,
                  fmax: float | None = None,
+                 stft_window: str='hann',
+                 stft_freq_scale: str='log2',
+                 stft_center: bool=True,
+                 stft_fft_size: int = 1024,
                  bins_per_semitone: int = 1,
                  n_bins: int = 84,
                  center_bins: bool = False,
@@ -65,9 +70,10 @@ class AudioDataModule(LightningDataModule):
                  transforms: Sequence[torch.nn.Module] | None = None,
                  fold: int | None = None,
                  n_folds: int = 5,
-                 cache_dir: str = "./cache",
+                 cache_dir: str = "/import/research_c4dm/zg032/pesto_cache",
                  filter_unvoiced: bool = False,
-                 mmap_mode: str | None = None):
+                 mmap_mode: str | None = None,
+                 preprocessing_method="stft"):
         r"""
 
         Args:
@@ -107,6 +113,21 @@ class AudioDataModule(LightningDataModule):
             n_bins=n_bins,
             center_bins=center_bins
         )
+        # STFT
+        self.stft_sr = None
+        self.stft_kernels = None
+        self.hop_duration = hop_duration
+
+        self.stft_kwargs = dict(
+            fmin=fmin,
+            fmax=fmax,
+            window=stft_window,
+            freq_scale=stft_freq_scale,
+            center=stft_center,
+            n_fft=stft_fft_size
+        )
+
+        self.preprocessing_method = preprocessing_method
 
         # dataloader keyword-arguments
         self.dl_kwargs = dict(
@@ -176,17 +197,25 @@ class AudioDataModule(LightningDataModule):
         return self.transforms(x), y
 
     def load_data(self, audio_files: Path, annot_files: Path | None = None) -> torch.utils.data.Dataset:
-        cache_cqt = self.build_cqt_filename(audio_files)
-        if cache_cqt.exists():
-            inputs = np.load(cache_cqt, mmap_mode=self.mmap_mode)
-            cache_annot = cache_cqt.with_suffix(".csv")
+        if self.preprocessing_method == "hcqt":
+            cache_filename = self.build_cqt_filename(audio_files)
+        elif self.preprocessing_method == "stft":
+            cache_filename = self.build_stft_filename(audio_files)
+
+        if cache_filename.exists():
+            inputs = np.load(cache_filename, mmap_mode=self.mmap_mode)
+            cache_annot = cache_filename.with_suffix(".csv")
             annotations = np.loadtxt(cache_annot, dtype=np.float32) if cache_annot.exists() else None
         else:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            inputs, annotations = self.precompute_hcqt(audio_files, annot_files)
-            np.save(cache_cqt, inputs, allow_pickle=False)
+            if self.preprocessing_method == "hcqt":
+                inputs, annotations = self.precompute_hcqt(audio_files, annot_files)
+            elif self.preprocessing_method == "stft":
+                inputs, annotations = self.precompute_stft(audio_files, annot_files)
+            np.save(cache_filename, inputs, allow_pickle=False)
+            print(f"file sucessfully saved to:{cache_filename}")
             if annotations is not None:
-                np.savetxt(cache_cqt.with_suffix(".csv"), annotations)
+                np.savetxt(cache_filename.with_suffix(".csv"), annotations)
         return NpyDataset(inputs, labels=annotations, filter_unvoiced=self.filter_unvoiced)
 
     def build_cqt_filename(self, audio_files) -> Path:
@@ -201,6 +230,20 @@ class AudioDataModule(LightningDataModule):
         # build filename
         fname = "hcqt_" + hash_id + ".npy"
         return self.cache_dir / fname
+
+    def build_stft_filename(self, audio_files) -> Path:
+        # build a hash
+        dict_str = json.dumps({
+            "audio_files": str(audio_files),
+            "hop_duration": self.hop_duration,
+            **self.stft_kwargs
+        }, sort_keys=True)
+        hash_id = hashlib.sha256(dict_str.encode()).hexdigest()[:8]
+
+        # build filename
+        fname = "stft_" + hash_id + ".npy"
+        return self.cache_dir / fname
+
 
     def precompute_hcqt(self, audio_path: Path, annot_path: Path | None = None) -> Tuple[np.ndarray,np.ndarray]:
         data_dir = audio_path.parent
@@ -262,3 +305,156 @@ class AudioDataModule(LightningDataModule):
             self.hcqt_kernels = HarmonicCQT(sr=sr, hop_length=hop_length, **self.hcqt_kwargs)
 
         return self.hcqt_kernels(audio).squeeze(0).permute(2, 0, 1, 3)  # (time, harmonics, freq_bins, 2)
+
+    def precompute_stft(self, audio_path: Path, annot_path: Path | None = None) -> Tuple[np.ndarray,np.ndarray]:
+        data_dir = audio_path.parent
+
+        stft_list = []
+        with audio_path.open('r') as f:
+            audio_files = f.readlines()
+
+        if annot_path is not None:
+            with annot_path.open('r') as f:
+                annot_files = f.readlines()
+            annot_list = []
+        else:
+            annot_files = []
+            annot_list = None
+
+        log.info("Precomputing STFT...")
+        pbar = tqdm(itertools.zip_longest(audio_files, annot_files, fillvalue=None),
+                    total=len(audio_files),
+                    leave=False)
+        
+        batch_size = 256
+        frame_size = 80000
+        counter = 0
+        # batched_audio = []
+        buffer = []
+
+        for fname, annot in tqdm(pbar):  # Assuming pbar is a list of (filename, annotation) tuples
+            fname = fname.strip()
+            x, sr = torchaudio.load(os.path.join(data_dir, fname))
+            buffer.append(x.mean(dim=0))
+        buffer =  torch.cat(buffer, dim = 0) #(stacked_time, )
+
+
+        # Calculate the total number of frames we can create
+        num_frames = buffer.size(0) // frame_size
+
+        # Reshape the buffer into (num_frames, frame_size)
+        buffer = buffer[:num_frames * frame_size].view(num_frames, frame_size)
+
+        # Batch the frames
+        num_batches = num_frames // batch_size
+        batched_audio = buffer[:num_batches * batch_size].view(num_batches, batch_size, frame_size)
+
+        for i, batch in enumerate(batched_audio):
+            out = self.stft_preprocess(batch.to("cuda:0"), sr)  # convert to mono and compute STFT  -->  # (time, 1, freq_bins, 2)
+            #TODO how to make this faster?  
+            print(f"processed: {i}/{len(batched_audio)}, {out.shape}") 
+
+            stft_list.append(out.cpu().numpy()) #(num_samples*time_steps, 1, freq_bins, 2)
+        print("pre-processing finished!")
+        return np.concatenate(stft_list), np.concatenate(annot_list) if annot_list is not None else None #(concated_time (batch_dimension), harmonics, freq_bins, 2)
+
+    def precompute_stft_with_memmap(self, audio_path: Path, annot_path: Path | None = None) -> Tuple[np.ndarray, np.ndarray | None]:
+        data_dir = audio_path.parent
+
+        with audio_path.open('r') as f:
+            audio_files = f.readlines()
+
+        if annot_path is not None:
+            with annot_path.open('r') as f:
+                annot_files = f.readlines()
+            annot_list = []
+        else:
+            annot_files = []
+            annot_list = None
+
+        log.info("Precomputing STFT...")
+        pbar = tqdm(itertools.zip_longest(audio_files, annot_files, fillvalue=None),
+                    total=len(audio_files),
+                    leave=False)
+
+        batch_size = 256
+        frame_size = 80000
+        buffer = []
+
+        # Collect all audio data into a single buffer
+        for fname, annot in tqdm(pbar):
+            fname = fname.strip()
+            x, sr = torchaudio.load(os.path.join(data_dir, fname))
+            buffer.append(x.mean(dim=0))
+        buffer = torch.cat(buffer, dim=0)  # (stacked_time,)
+
+        # Calculate the total number of frames we can create
+        num_frames = buffer.size(0) // frame_size
+
+        # Reshape the buffer into (num_frames, frame_size)
+        buffer = buffer[:num_frames * frame_size].view(num_frames, frame_size)
+
+        # Batch the frames
+        num_batches = num_frames // batch_size
+        batched_audio = buffer[:num_batches * batch_size].view(num_batches, batch_size, frame_size)
+
+        # Memory-map file for STFT results
+        # stft_shape = (num_batches * batch_size, frame_size // 2 + 1, 2)  # Assume freq_bins = frame_size // 2 + 1  #TODO: figure out shape
+        
+        #test shape
+        example_batch = batched_audio[0].to("cuda:0")  # A single batch to determine the shape
+        example_out = self.stft_preprocess(example_batch, sr)
+
+        # The final output shape is (batch_size * time_steps, 1, freq_bins, 2)
+        num_time_steps = example_out.shape[0] // batch_size
+        freq_bins = example_out.shape[2]
+
+        print(f"num_time_steps:{num_time_steps}, freq_bins:{freq_bins}")
+
+        stft_shape = (num_batches, batch_size * num_time_steps, 1, freq_bins, 2)
+
+        
+        stft_memmap = np.memmap('stft_output.dat', dtype='float32', mode='w+', shape=stft_shape)
+
+        for i, batch in enumerate(batched_audio):
+            out = self.stft_preprocess(batch.to("cuda:0"), sr)  # convert to mono and compute STFT
+            print(f"processed: {i}/{len(batched_audio)}, {out.shape}")
+
+            # Write the output directly to the memory-mapped file
+            stft_memmap[i * batch_size:(i + 1) * batch_size] = out.cpu().numpy()
+
+            # Free GPU memory after processing each batch
+            # torch.cuda.empty_cache()
+
+        # Flush changes to disk
+        stft_memmap.flush()
+
+        # Handle annotations similarly if annot_list is not None
+        if annot_list is not None:
+            annot_memmap = np.concatenate(annot_list)
+            return stft_memmap, annot_memmap
+        else:
+            return stft_memmap, None
+
+    def stft_preprocess(self, audio: torch.Tensor, sr: int):
+        # compute CQT kernels if it does not exist yet
+        if sr != self.stft_sr:
+            self.stft_sr = sr
+            # hop_length = int(self.hop_duration * sr / 1000 + 0.5)
+            hop_length = int(self.stft_kwargs['n_fft']/4*3)
+            self.stft_kernels_preprocess = STFT(sr=sr, hop_length=hop_length, **self.stft_kwargs).to("cuda:0")
+
+        batch_time_freq_2 = self.stft_kernels_preprocess(audio).permute(0, 2, 1, 3) #batch, time, freq, 2
+        batchtime_freq_2 = batch_time_freq_2.reshape(batch_time_freq_2.shape[0]*batch_time_freq_2.shape[1], batch_time_freq_2.shape[2], batch_time_freq_2.shape[3])
+        batchtime_1_freq_2 = batchtime_freq_2.unsqueeze(1)
+        return  batchtime_1_freq_2#(batch_size*time_steps, 1, freq_bins,, 2)
+
+    def stft(self, audio: torch.Tensor, sr: int):
+        if sr != self.stft_sr:
+            self.stft_sr = sr
+            hop_length = int(self.stft_kwargs['n_fft']/4*3)
+            self.stft_kernels = STFT(sr=sr, hop_length=hop_length, **self.stft_kwargs)
+        return self.stft_kernels(audio).permute(2, 0, 1, 3)  # (1, freq_bins,time_steps, 2) --> (time_steps, 1, freq_bins,2); will need to be in this format: (time, harmonics, freq_bins, 2) 
+
+
+
