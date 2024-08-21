@@ -5,11 +5,17 @@ audio_files: ???
 harmonics:
   - 1
 hop_duration: 10.
-fmin: 27.5  # A0
-fmax: null
+fmin: 0.01  # A0
+fmax: 500
 bins_per_semitone: 3
 n_bins: ${eval:99 * ${data.bins_per_semitone} - 1}
 center_bins: true
+
+stft_window: 'hann'
+stft_freq_scale: 'log2'
+stft_center: True
+stft_fft_size: 1024 #TODO think of the frequency resolution
+preprocessing_method: "stft"
 
 # data-loading related args
 batch_size: 256
@@ -21,7 +27,7 @@ transforms:
   - _target_: src.data.transforms.ToLogMagnitude
 
 # misc options
-cache_dir: ${paths.root_dir}/cache
+cache_dir: /import/research_c4dm/zg032/pesto_cache
 filter_unvoiced: false
 mmap_mode: null
 
