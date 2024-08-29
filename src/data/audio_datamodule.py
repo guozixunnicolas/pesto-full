@@ -24,6 +24,42 @@ log = logging.getLogger(__name__)
 
 def hz_to_mid(freqs):
     return np.where(freqs > 0, 12 * np.log2(freqs / 440) + 69, 0)
+def low_pass_filter(waveform, cutoff_freq, sample_rate, filter_length=1001):
+    # Compute the normalized cutoff frequency
+    nyquist_rate = sample_rate / 2.0
+    normalized_cutoff = cutoff_freq / nyquist_rate
+
+    # Create a sinc filter
+    t = torch.arange(-(filter_length // 2), (filter_length // 2) + 1, dtype=torch.float32)
+    sinc_filter = torch.sin(2 * torch.pi * normalized_cutoff * t) / (torch.pi * t)
+    sinc_filter[filter_length // 2] = 2 * normalized_cutoff  # Avoid division by zero
+    
+    # Apply a window function (e.g., Hamming window)
+    window = torch.hamming_window(filter_length)
+    sinc_filter *= window
+    
+    # Normalize the filter to ensure the gain at DC is 1
+    sinc_filter /= sinc_filter.sum()
+    
+    # Apply the filter using convolution (in the time domain)
+    filtered_waveform = F.conv1d(waveform.unsqueeze(1), sinc_filter.unsqueeze(0).unsqueeze(1))
+    
+    return filtered_waveform.squeeze(1)
+
+def resample_waveform(waveform, original_sr, target_sr, lowpass_filter_width=6, rolloff=0.99, resampling_method='sinc_interpolation'):
+    # Create a Resample transform with anti-aliasing
+    resampler = torchaudio.transforms.Resample(
+        orig_freq=original_sr,
+        new_freq=target_sr,
+        lowpass_filter_width=lowpass_filter_width,
+        rolloff=rolloff,
+        resampling_method=resampling_method
+    )
+    
+    # Resample the waveform
+    resampled_waveform = resampler(waveform)
+    
+    return resampled_waveform
 
 
 class NpyDataset(torch.utils.data.Dataset):
@@ -73,7 +109,10 @@ class AudioDataModule(LightningDataModule):
                  cache_dir: str = "/import/research_c4dm/zg032/pesto_cache",
                  filter_unvoiced: bool = False,
                  mmap_mode: str | None = None,
-                 preprocessing_method="stft"):
+                 preprocessing_method="stft",
+                 cutoff_freq = 2048., 
+                 resample_sr = 4096
+                 ):
         r"""
 
         Args:
@@ -129,6 +168,9 @@ class AudioDataModule(LightningDataModule):
 
         self.preprocessing_method = preprocessing_method
 
+        self.cutoff_freq=cutoff_freq 
+        self.resample_sr=resample_sr 
+        
         # dataloader keyword-arguments
         self.dl_kwargs = dict(
             batch_size=batch_size,
@@ -211,7 +253,7 @@ class AudioDataModule(LightningDataModule):
             if self.preprocessing_method == "hcqt":
                 inputs, annotations = self.precompute_hcqt(audio_files, annot_files)
             elif self.preprocessing_method == "stft":
-                inputs, annotations = self.precompute_stft(audio_files, annot_files)
+                inputs, annotations = self.precompute_stft_LPF_downsample(audio_files, annot_files)
             np.save(cache_filename, inputs, allow_pickle=False)
             print(f"file sucessfully saved to:{cache_filename}")
             if annotations is not None:
@@ -358,6 +400,55 @@ class AudioDataModule(LightningDataModule):
         print("pre-processing finished!")
         return np.concatenate(stft_list), np.concatenate(annot_list) if annot_list is not None else None #(concated_time (batch_dimension), harmonics, freq_bins, 2)
 
+    def precompute_stft_LPF_downsample(self, audio_path: Path, annot_path: Path | None = None) -> Tuple[np.ndarray,np.ndarray]:
+        data_dir = audio_path.parent
+
+        stft_list = []
+        with audio_path.open('r') as f:
+            audio_files = f.readlines()
+
+        if annot_path is not None:
+            with annot_path.open('r') as f:
+                annot_files = f.readlines()
+            annot_list = []
+        else:
+            annot_files = []
+            annot_list = None
+
+        log.info("Precomputing STFT...")
+        pbar = tqdm(itertools.zip_longest(audio_files, annot_files, fillvalue=None),
+                    total=len(audio_files),
+                    leave=False)
+        
+        batch_size = 256 #process this many samples at once
+        frame_size = 80000 #number of samples in a frame
+        counter = 0
+        buffer = []
+        
+        for fname, annot in tqdm(pbar):  # Assuming pbar is a list of (filename, annotation) tuples
+            fname = fname.strip()
+            x, sr = torchaudio.load(os.path.join(data_dir, fname))
+            waveform_LPF_resampled = self.LPF_resample(x, sr, self.cutoff_freq, self.resample_sr)
+            buffer.append(waveform_LPF_resampled.mean(dim=0))
+
+        buffer =  torch.cat(buffer, dim = 0) #(stacked_time, )
+
+        # Calculate the total number of frames we can create
+        num_frames = buffer.size(0) // frame_size
+
+        # Reshape the buffer into (num_frames, frame_size)
+        buffer = buffer[:num_frames * frame_size].view(num_frames, frame_size)
+
+        # Batch the frames
+        num_batches = num_frames // batch_size
+        batched_audio = buffer[:num_batches * batch_size].view(num_batches, batch_size, frame_size)
+
+        for i, batch in enumerate(batched_audio):
+            out = self.stft_preprocess(batch.to("cuda"), NEW_SR)  # convert to mono and compute STFT  -->  # (time, 1, freq_bins, 2)
+            print(f"processed: {i}/{len(batched_audio)}") 
+            stft_list.append(out.cpu().numpy()) #(num_samples*time_steps, 1, freq_bins, 2)
+        return np.concatenate(stft_list), np.concatenate(annot_list) if annot_list is not None else None #(concated_time (batch_dimension), harmonics, freq_bins, 2)
+
     def precompute_stft_with_memmap(self, audio_path: Path, annot_path: Path | None = None) -> Tuple[np.ndarray, np.ndarray | None]:
         data_dir = audio_path.parent
 
@@ -440,9 +531,8 @@ class AudioDataModule(LightningDataModule):
         # compute CQT kernels if it does not exist yet
         if sr != self.stft_sr:
             self.stft_sr = sr
-            # hop_length = int(self.hop_duration * sr / 1000 + 0.5)
-            hop_length = int(self.stft_kwargs['n_fft']/4*3)
-            self.stft_kernels_preprocess = STFT(sr=sr, hop_length=hop_length, **self.stft_kwargs).to("cuda:0")
+            hop_length = int(self.hop_duration * sr / 1000 + 0.5)
+            self.stft_kernels_preprocess = STFT(sr=sr, hop_length=hop_length, **self.stft_kwargs).to("cuda")
 
         batch_time_freq_2 = self.stft_kernels_preprocess(audio).permute(0, 2, 1, 3) #batch, time, freq, 2
         batchtime_freq_2 = batch_time_freq_2.reshape(batch_time_freq_2.shape[0]*batch_time_freq_2.shape[1], batch_time_freq_2.shape[2], batch_time_freq_2.shape[3])
@@ -456,5 +546,11 @@ class AudioDataModule(LightningDataModule):
             self.stft_kernels = STFT(sr=sr, hop_length=hop_length, **self.stft_kwargs)
         return self.stft_kernels(audio).permute(2, 0, 1, 3)  # (1, freq_bins,time_steps, 2) --> (time_steps, 1, freq_bins,2); will need to be in this format: (time, harmonics, freq_bins, 2) 
 
+    def LPF_resample(self, audio, sr, cutoff_freq, new_sr):
+        #LPF
+        waveform_LPF = low_pass_filter(audio, cutoff_freq, sr)
+        #Downsample
+        waveform_LPF_resampled = resample_waveform(waveform_LPF, sr, new_sr)
+        return waveform_LPF_resampled
 
 
