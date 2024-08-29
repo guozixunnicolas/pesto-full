@@ -9,8 +9,8 @@ from src.callbacks.loss_weighting import LossWeighting
 from src.data.pitch_shift import PitchShiftCQT
 from src.losses import NullLoss
 from src.utils import reduce_activations, remove_omegaconf_dependencies
-from src.utils.calibration import generate_synth_data
-
+from src.utils.calibration import generate_synth_data, generate_synth_data_based_on_f0
+import random
 
 log = logging.getLogger(__name__)
 
@@ -180,21 +180,31 @@ class PESTO(LightningModule):
     def estimate_shift(self) -> None:
         r"""Estimate the shift to predict absolute pitches from relative activations"""
         # 0. Define labels
-        labels = torch.arange(1, 30)
-        labels_frequencies = 440.0 * 2 ** ((labels - 69) / 12)
+        labels = torch.arange(60, 99)
+        labels_frequencies = labels 
         # 1. Generate synthetic audio and convert it to HCQT
-        sr = 16000
+        sr = 16000 #TODO: remove hardcoding
         dm = self.trainer.datamodule
         batch = []
         for p in labels:
-            audio = generate_synth_data(p, sr=sr)
+            audio, f0 = generate_synth_data_based_on_f0(p, sr=sr)
+
+            audio = audio.unsqueeze(0)
             """TODO: add switch between stft and hcqt"""
             # hcqt = dm.hcqt(audio, sr)
             # batch.append(hcqt[0])
 
-            stft = dm.stft(audio, sr)
-            # print(f"stft norm AAA: {stft.shape}")
-            batch.append(stft[0]) #pitch is the same across all timesteps so only choose time[0]
+            #LPF and Resample
+            waveform_LPF_resampled = dm.LPF_resample(audio, sr, dm.cutoff_freq, dm.resample_sr)
+            
+            audio = waveform_LPF_resampled.mean(dim=0)
+
+            stft = dm.stft_preprocess(audio.to(self.device), dm.resample_sr)
+
+            # Generate a random index within the valid range
+            random_index = random.randint(0, stft.shape[0] - 1)
+
+            batch.append(stft[random_index]) #pitch is the same across all timesteps so only choose time[0] --> select a random time step
 
         # 2. Stack batch and apply final transforms
         x = torch.stack(batch, dim=0).to(self.device)
@@ -203,13 +213,13 @@ class PESTO(LightningModule):
         # 3. Pass it through the module
         preds = self.forward(x, shift=False)
 
-        # 4. Compute the difference between the predictions and the expected values
+        # # 4. Compute the difference between the predictions and the expected values
         diff = preds - labels_frequencies.to(self.device)
 
         # 5. Define the shift as the median distance and check that the std is low-enough
         shift, std = diff.median(), diff.std()
 
-        log.info(f"Estimated shift: {shift.cpu().item():.3f} (std = {std.cpu().item():.3f})")
+        log.info(f"Estimated shift: {shift.cpu().item():.3f} (std = {std.cpu().item():.3f}) (diff = {diff.cpu().numpy()})")
 
         # 6. Update `self.shift` value
         self.shift.fill_(shift)
