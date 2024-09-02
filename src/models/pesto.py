@@ -160,6 +160,8 @@ class PESTO(LightningModule):
         checkpoint['stft_params'] = remove_omegaconf_dependencies(self.trainer.datamodule.stft_kwargs)
         checkpoint['preprocessing_method'] = remove_omegaconf_dependencies(self.trainer.datamodule.preprocessing_method)
         checkpoint['max_F0'] = remove_omegaconf_dependencies(self.max_F0)
+        checkpoint['cutoff_freq'] = remove_omegaconf_dependencies(self.trainer.datamodule.cutoff_freq)
+        checkpoint['resample_sr'] = remove_omegaconf_dependencies(self.trainer.datamodule.resample_sr)
 
     def configure_optimizers(self) -> Mapping[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.
