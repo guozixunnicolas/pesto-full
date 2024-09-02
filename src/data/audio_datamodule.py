@@ -17,7 +17,8 @@ from lightning import LightningDataModule
 
 from src.data.hcqt import HarmonicCQT
 from nnAudio.features import STFT
-
+import torchaudio.transforms as T
+import torch.nn.functional as F
 
 log = logging.getLogger(__name__)
 
@@ -444,7 +445,7 @@ class AudioDataModule(LightningDataModule):
         batched_audio = buffer[:num_batches * batch_size].view(num_batches, batch_size, frame_size)
 
         for i, batch in enumerate(batched_audio):
-            out = self.stft_preprocess(batch.to("cuda"), NEW_SR)  # convert to mono and compute STFT  -->  # (time, 1, freq_bins, 2)
+            out = self.stft_preprocess(batch.to("cuda"), self.resample_sr)  # convert to mono and compute STFT  -->  # (time, 1, freq_bins, 2)
             print(f"processed: {i}/{len(batched_audio)}") 
             stft_list.append(out.cpu().numpy()) #(num_samples*time_steps, 1, freq_bins, 2)
         return np.concatenate(stft_list), np.concatenate(annot_list) if annot_list is not None else None #(concated_time (batch_dimension), harmonics, freq_bins, 2)
@@ -554,3 +555,33 @@ class AudioDataModule(LightningDataModule):
         return waveform_LPF_resampled
 
 
+if __name__=="__main__":
+    audio_files = "/import/research_c4dm/zg032/LibriSpeech_train_clean_100/LibriSpeech_train-clean-100.csv"
+
+        # Initialize the AudioDataModule
+    audio_data_module = AudioDataModule(
+        audio_files=audio_files,
+        annot_files=None,
+        harmonics=[1],
+        hop_duration=10.0,
+        fmin=0.01,
+        fmax=500,
+        bins_per_semitone=3,
+        n_bins=99 * 3 - 1,  # Based on the configuration provided
+        center_bins=True,
+        batch_size=256,
+        num_workers=8,
+        pin_memory=True,
+        transforms=[],  # Assuming ToLogMagnitude is defined somewhere
+        fold=None,
+        n_folds=5,
+        cache_dir='./cache',
+        filter_unvoiced=False,
+        mmap_mode=None,
+        preprocessing_method = "stft",
+        stft_window = "hann", 
+        stft_freq_scale = "log",
+        stft_center = True
+    )
+    audio_data_module.prepare_data()
+    print(f"audio_data_module:{audio_data_module.train_dataset[0]}")
