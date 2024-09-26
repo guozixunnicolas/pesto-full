@@ -15,8 +15,8 @@ encoder:
   # n_bins_in: ${eval:88 * ${data.bins_per_semitone}}
   # output_dim: ${eval:128 * ${data.bins_per_semitone}}
 
-  n_bins_in: 4065 # #ugly fix! change this to --> FFT_size/2 - shift  513 - 16*2 = 481   #${eval:${data.stft_fft_size}//2 + 1} #${eval:88 * ${data.bins_per_semitone}} #TODO: what should be the dimension for n_bin_in? n_fft I think
-  output_dim: ${model.max_F0} #bins per hz = 1
+  n_bins_in: 481 # #ugly fix! change this to --> FFT_size/2 - shift  513 - 16*2 = 481   #${eval:${data.stft_fft_size}//2 + 1} #${eval:88 * ${data.bins_per_semitone}} #TODO: what should be the dimension for n_bin_in? n_fft I think
+  output_dim: ${model.max_F0} #bins per hz = 1 is this still bins/Hz 
 
 equiv_loss_fn:
   _target_: src.losses.equivariance.PowerSeries

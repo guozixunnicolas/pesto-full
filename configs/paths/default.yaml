@@ -4,7 +4,7 @@
 root_dir: .
 
 # path to data directory
-data_dir: ${paths.root_dir}/data
+data_dir: /import/c4dm-datasets/LibriSpeech/LibriSpeech/train-clean-100 #/import/research_c4dm/zg032/A_aligned_small
 
 # path to logging directory
 log_dir: ${paths.root_dir}/logs/

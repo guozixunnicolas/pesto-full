@@ -1,5 +1,5 @@
 defaults:
   - default
 
-audio_files: LibriSpeech_train-clean-100.csv
+audio_files: /import/research_c4dm/zg032/LibriSpeech_train_clean_100/LibriSpeech_train-clean-100.csv
 hop_duration: 20.

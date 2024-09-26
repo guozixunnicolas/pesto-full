@@ -4,12 +4,15 @@ audio_files: ???
 # HCQT-related args
 harmonics:
   - 1
-hop_duration: 10.
+hop_duration: 10. #milleseconds?
 fmin: 0.01  # A0
-fmax: 500
+fmax: 1000
 bins_per_semitone: 3
 n_bins: ${eval:99 * ${data.bins_per_semitone} - 1}
 center_bins: true
+
+cutoff_freq: 2048.
+resample_sr: 4096
 
 stft_window: 'hann'
 stft_freq_scale: 'log2'
