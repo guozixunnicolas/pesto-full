@@ -10,6 +10,7 @@ from src.data.pitch_shift import PitchShiftCQT
 from src.losses import NullLoss
 from src.utils import reduce_activations, remove_omegaconf_dependencies
 from src.utils.calibration import generate_synth_data, generate_synth_data_based_on_f0
+from src.utils.log_scale import find_bin_for_frequency, log2_bin_boundaries, find_frequency_for_bin
 import random
 
 log = logging.getLogger(__name__)
@@ -214,9 +215,16 @@ class PESTO(LightningModule):
 
         # 3. Pass it through the module
         preds = self.forward(x, shift=False)
+        fmin = dm.stft_kwargs['fmin']
+        fmax = dm.stft_kwargs['fmax']
+        num_of_bins = self.max_F0
+
+        bin_boundaries = log2_bin_boundaries(fmin, fmax, num_of_bins)
+        print(f"{fmin=}, {fmax=}, {num_of_bins=} {bin_boundaries=}")
+        log_freq = find_bin_for_frequency(labels.tolist(), bin_boundaries)
 
         # # 4. Compute the difference between the predictions and the expected values
-        diff = preds - labels_frequencies.to(self.device)
+        diff = preds - torch.tensor(log_freq).to(self.device)
 
         # 5. Define the shift as the median distance and check that the std is low-enough
         shift, std = diff.median(), diff.std()

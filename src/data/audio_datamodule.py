@@ -249,6 +249,7 @@ class AudioDataModule(LightningDataModule):
             inputs = np.load(cache_filename, mmap_mode=self.mmap_mode)
             cache_annot = cache_filename.with_suffix(".csv")
             annotations = np.loadtxt(cache_annot, dtype=np.float32) if cache_annot.exists() else None
+            print(f"precomputed data loaded from: {cache_filename}")
         else:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             if self.preprocessing_method == "hcqt":
@@ -393,7 +394,7 @@ class AudioDataModule(LightningDataModule):
         batched_audio = buffer[:num_batches * batch_size].view(num_batches, batch_size, frame_size)
 
         for i, batch in enumerate(batched_audio):
-            out = self.stft_preprocess(batch.to("cuda:0"), sr)  # convert to mono and compute STFT  -->  # (time, 1, freq_bins, 2)
+            out = self.stft_preprocess(batch.to("cuda"), sr)  # convert to mono and compute STFT  -->  # (time, 1, freq_bins, 2)
             #TODO how to make this faster?  
             print(f"processed: {i}/{len(batched_audio)}, {out.shape}") 
 
