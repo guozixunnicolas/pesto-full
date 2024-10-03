@@ -5,8 +5,8 @@ audio_files: ???
 harmonics:
   - 1
 hop_duration: 10. #milleseconds?
-fmin: 0.01  # A0
-fmax: 1000
+fmin: 20  # A0
+fmax: 500
 bins_per_semitone: 3
 n_bins: ${eval:99 * ${data.bins_per_semitone} - 1}
 center_bins: true

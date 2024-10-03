@@ -198,11 +198,13 @@ class PESTO(LightningModule):
             # batch.append(hcqt[0])
 
             #LPF and Resample
+            """
             waveform_LPF_resampled = dm.LPF_resample(audio, sr, dm.cutoff_freq, dm.resample_sr)
             
             audio = waveform_LPF_resampled.mean(dim=0)
 
-            stft = dm.stft_preprocess(audio.to(self.device), dm.resample_sr)
+            stft = dm.stft_preprocess(audio.to(self.device), dm.resample_sr)"""
+            stft = dm.stft_preprocess(audio.to(self.device), sr)
 
             # Generate a random index within the valid range
             random_index = random.randint(0, stft.shape[0] - 1)
@@ -220,7 +222,6 @@ class PESTO(LightningModule):
         num_of_bins = self.max_F0
 
         bin_boundaries = log2_bin_boundaries(fmin, fmax, num_of_bins)
-        print(f"{fmin=}, {fmax=}, {num_of_bins=} {bin_boundaries=}")
         log_freq = find_bin_for_frequency(labels.tolist(), bin_boundaries)
 
         # # 4. Compute the difference between the predictions and the expected values

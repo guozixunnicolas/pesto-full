@@ -255,7 +255,7 @@ class AudioDataModule(LightningDataModule):
             if self.preprocessing_method == "hcqt":
                 inputs, annotations = self.precompute_hcqt(audio_files, annot_files)
             elif self.preprocessing_method == "stft":
-                inputs, annotations = self.precompute_stft_LPF_downsample(audio_files, annot_files)
+                inputs, annotations = self.precompute_stft(audio_files, annot_files)
             np.save(cache_filename, inputs, allow_pickle=False)
             print(f"file sucessfully saved to:{cache_filename}")
             if annotations is not None:
